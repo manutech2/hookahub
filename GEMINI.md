@@ -22,6 +22,33 @@ Para que Google reconozca adecuadamente a la aplicación en Android durante el L
   1. **Depuración (Debug)**: Generada automáticamente al probar en emulador (clave: `debug.keystore`).
   2. **Producción (Release)**: Vinculada al fichero `upload-keystore.jks` utilizado mediante `key.properties` para construir el Google Play AppBundle (`.aab`).
 
+### Detección de Usuario Ya Registrado en Supabase Auth (identities.isEmpty)
+
+- **Problema**: Cuando un usuario intenta registrarse con un correo electrónico que ya existe en Supabase Auth y el proyecto tiene activada la confirmación de correo junto con la protección contra enumeración de usuarios (*Email Enumeration Protection*), Supabase GoTrue **no lanza una `AuthException`**. En su lugar, responde con HTTP 200 y un objeto `AuthResponse` donde `response.user != null`, pero su propiedad `identities` es una lista vacía (`response.user!.identities == null || response.user!.identities!.isEmpty`). Asumir que la ausencia de excepción equivale a un registro exitoso provoca falsos positivos en la UI ("Registro exitoso"), llamadas innecesarias a `ensureProfile()` y confusión en el usuario al no recibir ningún correo de verificación.
+- **Solución Arquitectónica (Regla de Oro)**:
+  1. **Inspección obligatoria de `identities`**: En todo flujo de registro por correo (`AuthProvider.registerEmail`), tras invocar `signUp`, es obligatorio verificar si `response.user != null` y comprobar el contenido de `response.user!.identities`:
+     ```dart
+     final registeredUser = response.user;
+     if (registeredUser != null) {
+       final identities = registeredUser.identities;
+       if (identities == null || identities.isEmpty) {
+         AppLogger.warning(
+           'Intento de registro con correo ya existente (identities vacío).',
+         );
+         return AppErrorMapper.toSpanish(
+           const AuthException(
+             'User already registered',
+             code: 'user_already_exists',
+           ),
+         );
+       }
+       // Solo sincronizar perfil cuando existen identidades reales
+       await _svc.ensureProfile(...);
+     }
+     ```
+  2. **Doble barrera de compatibilidad**: Mantener siempre el bloque `on AuthException catch (e)` delegado en `AppErrorMapper.toSpanish(e)` para cubrir entornos donde la protección contra enumeración esté desactivada y GoTrue arroje directamente el código `user_already_exists`.
+  3. **Resiliencia en UI (`RegisterPage`)**: Si `registerEmail` devuelve error, detener el estado de carga (`_isLoading = false`), mantener al usuario en la pantalla sin ejecutar `Navigator.pop(context)`, resaltar el error en el campo de correo electrónico (con `Semantics(liveRegion: true)` para accesibilidad) y ofrecer accesos directos hacia **Iniciar sesión** y **¿Olvidaste tu contraseña?**.
+
 ## 📁 Estructura y Seguridad del Repositorio
 
 - Siempre ignorar (`.gitignore`) ficheros como `.env`, `key.properties`, y cualquier `.keystore` o `.jks` que contenga claves criptográficas o IDs críticos en texto plano.
@@ -1022,5 +1049,21 @@ Se ha migrado del sistema de `ScaffoldMessenger` a un sistema de notificaciones 
   2. **Reconciliación por Lote en Realtime**: Mantener `Stream<List<AppNotification>>` sin `.expand()` y reconciliar el lote completo en `NotificationsProvider._onRealtimeSnapshot` con una única llamada a `notifyListeners()`.
   3. **Atomicidad vía RPC (`update_user_mix`)**: Ejecutar la edición de cabecera y sustitución de componentes de una mezcla dentro de la función PostgreSQL `public.update_user_mix(p_mix_id, p_name, p_description, p_components)` en una sola transacción SQL.
   4. **Aislamiento de Rebuilds y Contenedores Publicitarios**: Usar `ValueListenableBuilder<TextEditingValue>` sobre `_searchController` únicamente para el `suffixIcon` del buscador global, y envolver el marco visual de `AdBannerCard` mediante el parámetro `builder` de `AdBannerWidget` para que solo se pinte cuando `_isLoaded && _bannerAd != null`.
+
+### 10. Flujo de Recuperación de Contraseña y Trampa de `AuthChangeEvent.passwordRecovery`
+- **Problema**: Al pulsar el enlace de recuperación enviado por correo (`resetPasswordForEmail` con `redirectTo: 'io.supabase.flutter://login-callback/'`), el SDK de Supabase establece una sesión temporal (`currentUser != null`) y emite `AuthChangeEvent.passwordRecovery`. Si `AuthProvider.isAuthenticated` solo evalúa `user != null`, `AuthGate` redirige inmediatamente a `MainNavigationPage` sin permitir al usuario establecer su nueva contraseña.
+- **Solución Arquitectónica (Regla de Oro)**:
+  1. **Aislamiento de Estado de Recuperación en `AuthProvider`**: Gestionar el flag `_isPasswordRecovery` (`bool get isPasswordRecovery`) y definir `bool get isAuthenticated => user != null && !_isPasswordRecovery;`.
+  2. **Navegación Automática en Deep Link**: Al recibir `AuthChangeEvent.passwordRecovery`, activar `_isPasswordRecovery = true`, notificar a los listeners registrados (`addPasswordRecoveryListener`) y abrir `ResetPasswordPage` sobre `rootNavigatorKey`.
+  3. **Restablecimiento y Transición Limpia**: En `ResetPasswordPage`, validar con la misma regex de fortaleza (`RegExp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)')` y longitud `>= 8`), actualizar mediante `AuthProvider.updatePassword()` (`client.auth.updateUser(UserAttributes(password: newPassword))`), limpiar `_isPasswordRecovery = false` y mostrar confirmación con `AppToast`.
+
+### 11. Compilación iOS: Error `PhaseScriptExecution` por Atributos Extendidos de macOS (`resource fork, Finder information, or similar detritus not allowed`)
+- **Problema**: Al abrir o editar imágenes en `assets/` (ej. `assets/icon/*.png`) con Vista Previa (Preview) o Finder en macOS, el sistema operativo adjunta atributos extendidos (`com.apple.quarantine`, `com.apple.metadata:kMDLabel_*`, `com.apple.FinderInfo`). Durante la fase `Run Script` (`xcode_backend.sh build`), `flutter assemble` copia esos archivos dentro de `App.framework/flutter_assets/` y ejecuta `codesign` sobre `App.framework/App`, el cual falla en compilaciones firmadas para dispositivo físico con:
+  `App.framework/App: resource fork, Finder information, or similar detritus not allowed` → `Command PhaseScriptExecution failed with a nonzero exit code`.
+- **Solución Arquitectónica (Regla de Oro)**:
+  1. **Limpieza Automática en Build Phases de Xcode (`ios/Runner.xcodeproj/project.pbxproj`)**: Preceder la ejecución de `xcode_backend.sh` en las fases `Run Script` y `Thin Binary` con `xattr -cr "${BUILT_PRODUCTS_DIR}" "${TARGET_BUILD_DIR}" "${PROJECT_DIR}/../assets" 2>/dev/null || true`, eliminando cualquier atributo extendido de macOS antes de empaquetar y firmar `App.framework`.
+  2. **Limpieza de Caché de Productos en `DerivedData`**: Si un `App.framework` previo en `~/Library/Developer/Xcode/DerivedData/Runner-*/Build/Products/` ya quedó contaminado, ejecutar `xattr -cr` sobre dicho directorio o `flutter clean`.
+
+
 
 

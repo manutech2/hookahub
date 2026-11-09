@@ -3,6 +3,7 @@ import '../../../core/constants.dart';
 import '../../../widgets/pastel_textfield.dart';
 import 'package:provider/provider.dart';
 import 'auth_provider.dart';
+import 'forgot_password_page.dart';
 import '../../../core/utils/app_toast.dart';
 
 class PastelPasswordField extends StatelessWidget {
@@ -98,11 +99,31 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _firstNameError = false;
   bool _lastNameError = false;
   bool _emailError = false;
+  String? _emailServerError;
+  String? _failedRegisteredEmail;
   bool _passwordError = false;
   bool _confirmPasswordError = false;
   bool _showErrors = false;
   bool _triedRegister = false;
   bool _showAgeError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailController.addListener(_onEmailChanged);
+  }
+
+  void _onEmailChanged() {
+    if (_emailServerError != null &&
+        _emailController.text.trim() != _failedRegisteredEmail) {
+      setState(() {
+        _emailServerError = null;
+        _failedRegisteredEmail = null;
+        final value = _emailController.text;
+        _emailError = value.isNotEmpty && !_emailRegex.hasMatch(value);
+      });
+    }
+  }
 
   bool _isOlderThan18(DateTime birthDate) {
     final now = DateTime.now();
@@ -144,6 +165,7 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   void dispose() {
+    _emailController.removeListener(_onEmailChanged);
     _usernameFocus.dispose();
     _firstNameFocus.dispose();
     _lastNameFocus.dispose();
@@ -377,11 +399,12 @@ class _RegisterPageState extends State<RegisterPage> {
                 onFocusChange: (hasFocus) {
                   if (!hasFocus) {
                     final value = _emailController.text;
-                    final hasError =
+                    final hasFormatError =
                         value.isNotEmpty && !_emailRegex.hasMatch(value);
                     setState(() {
-                      _emailError = hasError;
-                      if (hasError) _showErrors = true;
+                      _emailError =
+                          hasFormatError || _emailServerError != null;
+                      if (hasFormatError) _showErrors = true;
                     });
                   }
                 },
@@ -399,13 +422,64 @@ class _RegisterPageState extends State<RegisterPage> {
               if (_showErrors && _emailError) ...[
                 Padding(
                   padding: const EdgeInsets.only(left: 8, top: 4),
-                  child: Text(
-                    _emailController.text.isEmpty
-                        ? 'El correo electrónico es obligatorio'
-                        : 'Introduce un correo electrónico válido',
-                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  child: Semantics(
+                    container: true,
+                    liveRegion: true,
+                    child: Text(
+                      _emailServerError ??
+                          (_emailController.text.isEmpty
+                              ? 'El correo electrónico es obligatorio'
+                              : 'Introduce un correo electrónico válido'),
+                      style: const TextStyle(color: warningRed, fontSize: 13),
+                    ),
                   ),
                 ),
+                if (_emailServerError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, top: 4),
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: isDark ? darkNavy : navy,
+                            minimumSize: const Size(48, 48),
+                            tapTargetSize: MaterialTapTargetSize.padded,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                          onPressed: _isLoading
+                              ? null
+                              : () => Navigator.pop(context),
+                          child: Semantics(
+                            label: 'Iniciar sesión con tu cuenta existente',
+                            child: const ExcludeSemantics(
+                              child: Text('Iniciar sesión'),
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: isDark ? darkNavy : navy,
+                            minimumSize: const Size(48, 48),
+                            tapTargetSize: MaterialTapTargetSize.padded,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                          ),
+                          onPressed: _isLoading
+                              ? null
+                              : () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          const ForgotPasswordPage(),
+                                    ),
+                                  );
+                                },
+                          child: const Text('¿Olvidaste tu contraseña?'),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
               const SizedBox(height: 16),
               Text(
@@ -524,6 +598,8 @@ class _RegisterPageState extends State<RegisterPage> {
                           setState(() {
                             _showErrors = true;
                             _triedRegister = true;
+                            _emailServerError = null;
+                            _failedRegisteredEmail = null;
                             _usernameError =
                                 username.isEmpty ||
                                 username.length < 3 ||
@@ -563,7 +639,21 @@ class _RegisterPageState extends State<RegisterPage> {
                           );
                           if (!mounted || !context.mounted) return;
                           if (error != null) {
-                            setState(() => _isLoading = false);
+                            final isEmailRelatedError =
+                                error.toLowerCase().contains(
+                                      'correo electrónico',
+                                    ) ||
+                                    error.toLowerCase().contains('ya existe');
+                            setState(() {
+                              _isLoading = false;
+                              if (isEmailRelatedError) {
+                                _showErrors = true;
+                                _emailError = true;
+                                _emailServerError = error;
+                                _failedRegisteredEmail =
+                                    _emailController.text.trim();
+                              }
+                            });
                             AppToast.showError(context, error);
                             return;
                           }

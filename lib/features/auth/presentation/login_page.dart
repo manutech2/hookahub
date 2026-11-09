@@ -5,6 +5,7 @@ import '../../../core/theme_provider.dart';
 import '../../../widgets/pastel_textfield.dart';
 import '../../../widgets/social_login_button.dart';
 import 'auth_provider.dart';
+import 'forgot_password_page.dart';
 import 'register_page.dart';
 import '../../../core/utils/app_toast.dart';
 
@@ -211,7 +212,28 @@ class _LoginPageState extends State<LoginPage> {
                               },
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: isDark ? darkNavy : navy,
+                          minimumSize: const Size(48, 40),
+                        ),
+                        onPressed: isSubmitting
+                            ? null
+                            : () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ForgotPasswordPage(),
+                                  ),
+                                );
+                              },
+                        child: const Text('¿Has olvidado tu contraseña?'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
                       height: 50,

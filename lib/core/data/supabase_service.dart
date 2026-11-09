@@ -35,6 +35,19 @@ class SupabaseService {
     );
   }
 
+  Future<void> sendPasswordResetEmail(String email) {
+    return client.auth.resetPasswordForEmail(
+      email.trim(),
+      redirectTo: 'io.supabase.flutter://login-callback/',
+    );
+  }
+
+  Future<UserResponse> updatePassword(String newPassword) {
+    return client.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
+  }
+
   Future<void> signOut() async {
     // Sign out del proveedor nativo de Google si fue utilizado
     try {

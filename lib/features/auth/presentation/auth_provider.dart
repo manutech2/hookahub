@@ -1,21 +1,30 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/constants.dart';
 import '../../../core/data/supabase_service.dart';
 import '../../../core/providers/database_health_provider.dart';
 import '../../../core/utils/app_error_mapper.dart';
 import '../../../core/utils/app_logger.dart';
+import 'reset_password_page.dart';
 
 class AuthProvider extends ChangeNotifier {
-  AuthProvider(this._svc) {
+  AuthProvider(this._svc, {GlobalKey<NavigatorState>? navigatorKey})
+      : _navigatorKey = navigatorKey ?? rootNavigatorKey {
     _sub = _svc.client.auth.onAuthStateChange.listen((event) async {
       _session = event.session;
       final ev = event.event;
-      if (_session != null &&
+      if (ev == AuthChangeEvent.passwordRecovery) {
+        _isPasswordRecovery = true;
+        _notifyPasswordRecovery();
+        _openResetPasswordPage();
+      } else if (_session != null &&
           (ev == AuthChangeEvent.signedIn ||
               ev == AuthChangeEvent.userUpdated)) {
+        if (ev == AuthChangeEvent.userUpdated && _isPasswordRecovery) {
+          _isPasswordRecovery = false;
+        }
         // Solo crear perfil básico si no se creó durante el registro
         final user = _session!.user;
         final metadata = user.userMetadata;
@@ -45,10 +54,11 @@ class AuthProvider extends ChangeNotifier {
           );
         }
 
-        if (ev == AuthChangeEvent.signedIn) {
+        if (ev == AuthChangeEvent.signedIn && !_isPasswordRecovery) {
           _notifySignIn();
         }
       } else if (ev == AuthChangeEvent.signedOut || _session == null) {
+        _isPasswordRecovery = false;
         _notifySignOut();
       }
       notifyListeners();
@@ -57,15 +67,28 @@ class AuthProvider extends ChangeNotifier {
   }
 
   final SupabaseService _svc;
+  final GlobalKey<NavigatorState> _navigatorKey;
   Session? _session;
   StreamSubscription<AuthState>? _sub;
+  bool _isPasswordRecovery = false;
+  bool _isResetRouteOpen = false;
 
   final List<VoidCallback> _signInListeners = [];
   final List<VoidCallback> _signOutListeners = [];
+  final List<VoidCallback> _passwordRecoveryListeners = [];
 
   Session? get session => _session;
   User? get user => _session?.user;
-  bool get isAuthenticated => user != null;
+  bool get isPasswordRecovery => _isPasswordRecovery;
+  bool get isAuthenticated => user != null && !_isPasswordRecovery;
+
+  /// Limpia el modo de recuperación de contraseña tras completarse o cancelarse.
+  void clearPasswordRecovery() {
+    if (_isPasswordRecovery) {
+      _isPasswordRecovery = false;
+      notifyListeners();
+    }
+  }
 
   /// Registra un listener que se ejecutará cuando el usuario inicie sesión
   void addSignInListener(VoidCallback listener) {
@@ -87,6 +110,16 @@ class AuthProvider extends ChangeNotifier {
     _signOutListeners.remove(listener);
   }
 
+  /// Registra un listener para el evento de recuperación de contraseña
+  void addPasswordRecoveryListener(VoidCallback listener) {
+    _passwordRecoveryListeners.add(listener);
+  }
+
+  /// Desregistra un listener de recuperación de contraseña
+  void removePasswordRecoveryListener(VoidCallback listener) {
+    _passwordRecoveryListeners.remove(listener);
+  }
+
   void _notifySignIn() {
     for (final listener in List<VoidCallback>.of(_signInListeners)) {
       try {
@@ -104,6 +137,37 @@ class AuthProvider extends ChangeNotifier {
       } catch (e, stack) {
         AppLogger.error('Error en listener de cierre de sesión', error: e, stackTrace: stack);
       }
+    }
+  }
+
+  void _notifyPasswordRecovery() {
+    for (final listener in List<VoidCallback>.of(_passwordRecoveryListeners)) {
+      try {
+        listener();
+      } catch (e, stack) {
+        AppLogger.error(
+          'Error en listener de recuperación de contraseña',
+          error: e,
+          stackTrace: stack,
+        );
+      }
+    }
+  }
+
+  void _openResetPasswordPage() {
+    if (_isResetRouteOpen) return;
+    final nav = _navigatorKey.currentState;
+    if (nav != null && nav.mounted) {
+      _isResetRouteOpen = true;
+      nav
+          .push(
+            MaterialPageRoute<void>(
+              builder: (_) => const ResetPasswordPage(),
+            ),
+          )
+          .whenComplete(() {
+            _isResetRouteOpen = false;
+          });
     }
   }
 
@@ -145,8 +209,22 @@ class AuthProvider extends ChangeNotifier {
           )
           .timeout(supabaseReadTimeout);
 
-      // Si el usuario se crea inmediatamente (sin confirmación de email)
-      if (response.user != null) {
+      final registeredUser = response.user;
+      if (registeredUser != null) {
+        final identities = registeredUser.identities;
+        if (identities == null || identities.isEmpty) {
+          AppLogger.warning(
+            'Intento de registro con correo ya existente (identities vacío).',
+          );
+          return AppErrorMapper.toSpanish(
+            const AuthException(
+              'User already registered',
+              code: 'user_already_exists',
+            ),
+          );
+        }
+
+        // Si el usuario se crea inmediatamente (sin confirmación de email o con identidades válidas)
         await _svc
             .ensureProfile(
               username: username,
@@ -182,6 +260,41 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  Future<String?> sendPasswordResetEmail(String email) async {
+    try {
+      await _svc
+          .sendPasswordResetEmail(email.trim())
+          .timeout(supabaseReadTimeout);
+      return null;
+    } on AuthException catch (e) {
+      return AppErrorMapper.toSpanish(e);
+    } catch (e) {
+      DatabaseHealthProvider.reportFailure(e);
+      return AppErrorMapper.toSpanish(e);
+    }
+  }
+
+  Future<String?> updatePassword(String newPassword) async {
+    try {
+      await _svc
+          .updatePassword(newPassword)
+          .timeout(supabaseWriteTimeout);
+      _isPasswordRecovery = false;
+      notifyListeners();
+      return null;
+    } on AuthException catch (e) {
+      return AppErrorMapper.toSpanish(e);
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error al actualizar contraseña en recuperación',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      DatabaseHealthProvider.reportFailure(e);
+      return AppErrorMapper.toSpanish(e);
+    }
+  }
+
   Future<void> signOut() async {
     try {
       await _svc.signOut().timeout(supabaseReadTimeout);
@@ -190,6 +303,7 @@ class AuthProvider extends ChangeNotifier {
       // Ignorar error de signOut, ya que el token local se borrará de todos modos
     } finally {
       _session = null;
+      _isPasswordRecovery = false;
       _notifySignOut();
       notifyListeners();
     }
@@ -200,6 +314,7 @@ class AuthProvider extends ChangeNotifier {
     _sub?.cancel();
     _signInListeners.clear();
     _signOutListeners.clear();
+    _passwordRecoveryListeners.clear();
     super.dispose();
   }
 }
