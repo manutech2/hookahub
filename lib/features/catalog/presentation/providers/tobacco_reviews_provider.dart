@@ -1,6 +1,8 @@
 import 'package:hookahub/core/utils/app_logger.dart';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/models/review.dart';
+import '../../../../core/utils/review_validator.dart';
 import '../../data/tobacco_reviews_repository.dart';
 
 // ---------------------------------------------------------------------------
@@ -38,7 +40,8 @@ class TobaccoReviewsError extends TobaccoReviewsState {
 // ---------------------------------------------------------------------------
 
 class TobaccoReviewsProvider extends ChangeNotifier {
-  TobaccoReviewsProvider(this._repository);
+  TobaccoReviewsProvider(this._repository, {String? currentUserId})
+    : _currentUserId = currentUserId;
 
   final TobaccoReviewsRepository _repository;
 
@@ -47,6 +50,16 @@ class TobaccoReviewsProvider extends ChangeNotifier {
 
   // Cache the tobacco ID to allow refreshing seamlessly
   String? _tobaccoId;
+  String? _currentUserId;
+
+  String? get currentUserId {
+    if (_currentUserId != null) return _currentUserId;
+    try {
+      return Supabase.instance.client.auth.currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
 
   TobaccoReviewsState get state => _state;
 
@@ -54,6 +67,15 @@ class TobaccoReviewsProvider extends ChangeNotifier {
         TobaccoReviewsLoaded(:final reviews) => reviews,
         _ => _cachedReviews,
       };
+
+  /// Reseña perteneciente al usuario autenticado actual, o `null` si aún no ha opinado.
+  Review? get userReview => ReviewValidator.findUserReview(
+        reviews,
+        currentUserId: currentUserId,
+      );
+
+  /// Indica si el usuario autenticado ya tiene una reseña publicada en este tabaco.
+  bool get hasUserReviewed => userReview != null;
 
   bool get isLoading => _state is TobaccoReviewsLoading;
 
@@ -71,18 +93,29 @@ class TobaccoReviewsProvider extends ChangeNotifier {
 
   int get reviewCount => reviews.length;
 
-  Future<void> loadReviews(String tobaccoId) async {
+  Future<void> loadReviews(String tobaccoId, {String? currentUserId}) async {
     _tobaccoId = tobaccoId;
+    if (currentUserId != null) {
+      _currentUserId = currentUserId;
+    }
     _state = const TobaccoReviewsLoading();
     notifyListeners();
 
     try {
       final fetched = await _repository.fetchReviews(tobaccoId);
-      _cachedReviews = fetched;
-      _state = TobaccoReviewsLoaded(fetched);
+      final sorted = ReviewValidator.sortWithUserReviewFirst(
+        fetched,
+        currentUserId: this.currentUserId,
+      );
+      _cachedReviews = sorted;
+      _state = TobaccoReviewsLoaded(sorted);
     } catch (e, stackTrace) {
       _state = const TobaccoReviewsError('Error al cargar las reseñas');
-      AppLogger.error('Error loading tobacco reviews', error: e, stackTrace: stackTrace);
+      AppLogger.error(
+        'Error loading tobacco reviews',
+        error: e,
+        stackTrace: stackTrace,
+      );
     } finally {
       notifyListeners();
     }
@@ -94,6 +127,11 @@ class TobaccoReviewsProvider extends ChangeNotifier {
     required String comment,
   }) async {
     if (_tobaccoId == null) return;
+    _currentUserId = userId;
+
+    if (hasUserReviewed) {
+      throw StateError('Ya has publicado una reseña para este tabaco.');
+    }
 
     try {
       await _repository.addReview(
@@ -103,10 +141,60 @@ class TobaccoReviewsProvider extends ChangeNotifier {
         comment: comment,
       );
       // Reload to get the updated list and server-side timestamp
-      await loadReviews(_tobaccoId!);
+      await loadReviews(_tobaccoId!, currentUserId: userId);
     } catch (e, stackTrace) {
       AppLogger.error('Error adding review', error: e, stackTrace: stackTrace);
       rethrow;
+    }
+  }
+
+  Future<bool> updateReview({
+    required String reviewId,
+    required double rating,
+    required String comment,
+  }) async {
+    if (_tobaccoId == null) return false;
+
+    try {
+      final success = await _repository.updateReview(
+        reviewId: reviewId,
+        tobaccoId: _tobaccoId!,
+        rating: rating,
+        comment: comment,
+      );
+      if (success) {
+        await loadReviews(_tobaccoId!, currentUserId: _currentUserId);
+      }
+      return success;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error updating tobacco review',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return false;
+    }
+  }
+
+  Future<bool> deleteReview(String reviewId) async {
+    if (_tobaccoId == null) return false;
+
+    try {
+      final success = await _repository.deleteReview(
+        reviewId: reviewId,
+        tobaccoId: _tobaccoId!,
+      );
+      if (success) {
+        await loadReviews(_tobaccoId!, currentUserId: _currentUserId);
+      }
+      return success;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error deleting tobacco review',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return false;
     }
   }
 }

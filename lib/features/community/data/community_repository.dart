@@ -928,6 +928,20 @@ class CommunityRepository {
         return false;
       }
 
+      final existingCount = await _supabase.client
+          .from('reviews')
+          .count(CountOption.exact)
+          .eq('mix_id', mixId)
+          .eq('author_id', user.id)
+          .timeout(supabaseReadTimeout);
+
+      if (existingCount > 0) {
+        AppLogger.warning(
+          'Intento de crear reseña duplicada para la mezcla: $mixId',
+        );
+        return false;
+      }
+
       await _supabase.client
           .from('reviews')
           .insert({

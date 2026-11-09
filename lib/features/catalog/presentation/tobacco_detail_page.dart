@@ -16,7 +16,9 @@ import '../data/tobacco_reviews_repository.dart';
 import 'providers/tobacco_reviews_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/services/deep_link_service.dart';
+import '../../../core/utils/app_logger.dart';
 import '../../../core/utils/app_toast.dart';
+import '../../../core/utils/review_validator.dart';
 
 class TobaccoDetailPage extends StatelessWidget {
   const TobaccoDetailPage({super.key, required this.tobacco});
@@ -302,6 +304,8 @@ class _TobaccoDetailViewState extends State<_TobaccoDetailView> {
     return Consumer<TobaccoReviewsProvider>(
       builder: (context, provider, child) {
         final reviews = provider.reviews;
+        final hasUserReviewed = provider.hasUserReviewed;
+        final currentUserId = provider.currentUserId;
 
         if (provider.isLoading && reviews.isEmpty) {
           return const SliverToBoxAdapter(
@@ -355,21 +359,31 @@ class _TobaccoDetailViewState extends State<_TobaccoDetailView> {
                       total: provider.reviewCount,
                     ),
                     const SizedBox(height: 16),
-                    _ReviewForm(
-                      controller: _reviewController,
-                      rating: _newRating,
-                      onRatingChanged: (v) => setState(() => _newRating = v),
-                      onSubmit: _handleSubmitReview,
-                    ),
-                    const SizedBox(height: 16),
+                    if (!hasUserReviewed) ...[
+                      _ReviewForm(
+                        controller: _reviewController,
+                        rating: _newRating,
+                        onRatingChanged: (v) => setState(() => _newRating = v),
+                        onSubmit: _handleSubmitReview,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                   ],
                 ),
               ),
               SliverList.builder(
                 itemCount: reviews.length,
-                itemBuilder: (context, index) => _ReviewTile(
-                  review: reviews[index],
-                ),
+                itemBuilder: (context, index) {
+                  final r = reviews[index];
+                  return _ReviewTile(
+                    key: ValueKey(r.id),
+                    review: r,
+                    isMyReview:
+                        currentUserId != null && currentUserId == r.authorId,
+                    onEdit: () => _handleEditReview(r),
+                    onDelete: () => _handleDeleteReview(r.id),
+                  );
+                },
               ),
             ],
           ),
@@ -385,27 +399,17 @@ class _TobaccoDetailViewState extends State<_TobaccoDetailView> {
     SharePlus.instance.share(ShareParams(text: text));
   }
 
-/// Valida los campos de una reseña (puntuación y comentario).
-/// Devuelve el mensaje de advertencia correspondiente o `null` si es válida.
-String? _validateReviewInput({
-  required double rating,
-  required String comment,
-}) {
-  final hasComment = comment.trim().isNotEmpty;
-  final hasRating = rating > 0;
-
-  if (!hasRating && !hasComment) {
-    return 'Añade una puntuación y un comentario';
-  } else if (!hasRating) {
-    return 'Indica una puntuación para continuar';
-  } else if (!hasComment) {
-    return 'Escribe un comentario sobre tu experiencia';
-  }
-  return null;
-}
-
   void _handleSubmitReview() async {
-    final validationError = _validateReviewInput(
+    final provider = context.read<TobaccoReviewsProvider>();
+    if (provider.hasUserReviewed) {
+      AppToast.showWarning(
+        context,
+        'Ya has publicado una reseña para este tabaco',
+      );
+      return;
+    }
+
+    final validationError = ReviewValidator.validate(
       rating: _newRating,
       comment: _reviewController.text,
     );
@@ -423,7 +427,7 @@ String? _validateReviewInput({
     }
 
     try {
-      await context.read<TobaccoReviewsProvider>().addReview(
+      await provider.addReview(
         userId: user.id,
         rating: _newRating,
         comment: _reviewController.text.trim(),
@@ -439,9 +443,87 @@ String? _validateReviewInput({
         FocusScope.of(context).unfocus();
         AppToast.showSuccess(context, 'Reseña publicada');
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error al publicar reseña en TobaccoDetailPage',
+        error: e,
+        stackTrace: stackTrace,
+      );
       if (mounted) {
-        AppToast.showError(context, 'Error al publicar: $e');
+        AppToast.showError(context, 'Error al publicar reseña');
+      }
+    }
+  }
+
+  void _handleEditReview(Review review) {
+    final provider = context.read<TobaccoReviewsProvider>();
+    showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => _EditReviewDialog(
+        initialRating: review.rating,
+        initialComment: review.comment,
+        onSave: (rating, comment) async {
+          final success = await provider.updateReview(
+            reviewId: review.id,
+            rating: rating,
+            comment: comment,
+          );
+          if (!mounted || !context.mounted) return false;
+
+          if (success) {
+            AppToast.showSuccess(context, 'Reseña actualizada');
+            return true;
+          } else {
+            AppToast.showError(context, 'Error al actualizar reseña');
+            return false;
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _handleDeleteReview(String reviewId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Eliminar reseña'),
+        content: const Text(
+          '¿Estás seguro de que quieres eliminar esta reseña?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      if (!mounted) return;
+      final provider = context.read<TobaccoReviewsProvider>();
+      final success = await provider.deleteReview(reviewId);
+      if (!mounted || !context.mounted) return;
+
+      if (success) {
+        AppToast.showSuccess(context, 'Reseña eliminada');
+      } else {
+        AppToast.showError(context, 'Error al eliminar reseña');
+      }
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error al eliminar reseña de tabaco',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      if (mounted && context.mounted) {
+        AppToast.showError(context, 'Error al eliminar reseña');
       }
     }
   }
@@ -656,6 +738,8 @@ class _ReviewForm extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 8),
+          _ReviewWordCounter(controller: controller),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerRight,
@@ -667,6 +751,48 @@ class _ReviewForm extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReviewWordCounter extends StatelessWidget {
+  const _ReviewWordCounter({required this.controller});
+
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final progress = ReviewValidator.evaluateProgress(value.text);
+        final isValid = progress.isValid;
+        final color = isValid
+            ? Theme.of(context).primaryColor
+            : Theme.of(
+                context,
+              ).textTheme.bodySmall?.color?.withValues(alpha: 0.7);
+
+        return Row(
+          children: [
+            Icon(
+              isValid ? Icons.check_circle_outline : Icons.info_outline,
+              size: 16,
+              color: color,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                progress.helperText,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: color,
+                  fontWeight: isValid ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -695,20 +821,141 @@ class _StarInput extends StatelessWidget {
   }
 }
 
-class _ReviewTile extends StatelessWidget {
-  const _ReviewTile({required this.review});
-  final Review review;
+class _EditReviewDialog extends StatefulWidget {
+  const _EditReviewDialog({
+    required this.initialRating,
+    required this.initialComment,
+    required this.onSave,
+  });
+
+  final double initialRating;
+  final String initialComment;
+  final Future<bool> Function(double rating, String comment) onSave;
+
+  @override
+  State<_EditReviewDialog> createState() => _EditReviewDialogState();
+}
+
+class _EditReviewDialogState extends State<_EditReviewDialog> {
+  late double _rating;
+  late final TextEditingController _controller;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _rating = widget.initialRating;
+    _controller = TextEditingController(text: widget.initialComment);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Editar reseña'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _StarInput(
+              value: _rating,
+              onChanged: (v) {
+                if (_isSaving) return;
+                setState(() => _rating = v);
+              },
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              enabled: !_isSaving,
+              maxLines: 4,
+              decoration: InputDecoration(
+                hintText: 'Comparte tu experiencia...',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _ReviewWordCounter(controller: _controller),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        TextButton(
+          onPressed: _isSaving
+              ? null
+              : () async {
+                  final text = _controller.text.trim();
+                  final validationError = ReviewValidator.validate(
+                    rating: _rating,
+                    comment: text,
+                  );
+                  if (validationError != null) {
+                    AppToast.showWarning(context, validationError);
+                    return;
+                  }
+
+                  setState(() => _isSaving = true);
+                  final success = await widget.onSave(_rating, text);
+
+                  if (!context.mounted) return;
+                  if (success) {
+                    Navigator.of(context).pop(true);
+                  } else {
+                    setState(() => _isSaving = false);
+                  }
+                },
+          child: _isSaving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewTile extends StatelessWidget {
+  const _ReviewTile({
+    super.key,
+    required this.review,
+    required this.isMyReview,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final Review review;
+  final bool isMyReview;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).primaryColor;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).primaryColor.withValues(alpha: 0.05),
+        color: primaryColor.withValues(alpha: isMyReview ? 0.09 : 0.05),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Theme.of(context).primaryColor.withValues(alpha: 0.12),
+          color: primaryColor.withValues(alpha: isMyReview ? 0.45 : 0.12),
+          width: isMyReview ? 1.5 : 1.0,
         ),
       ),
       child: Column(
@@ -726,11 +973,49 @@ class _ReviewTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      review.author,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            review.author,
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isMyReview) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: primaryColor.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 12,
+                                  color: primaryColor,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Tu reseña',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: primaryColor,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     Row(
                       children: List.generate(
@@ -740,7 +1025,7 @@ class _ReviewTile extends StatelessWidget {
                               ? Icons.star
                               : Icons.star_border,
                           size: 16,
-                          color: Theme.of(context).primaryColor,
+                          color: primaryColor,
                         ),
                       ),
                     ),
@@ -759,6 +1044,28 @@ class _ReviewTile extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(review.comment),
+          if (isMyReview) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Editar'),
+                ),
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  onPressed: onDelete,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  label: const Text('Eliminar'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

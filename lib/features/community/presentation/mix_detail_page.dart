@@ -25,6 +25,7 @@ import '../../profile/presentation/profile_provider.dart';
 import '../../mixes/presentation/user_mixes_provider.dart';
 import '../../../core/providers/database_health_provider.dart';
 import '../../../core/utils/app_toast.dart';
+import '../../../core/utils/review_validator.dart';
 
 /// Convierte una cadena a Title Case (primera letra de cada palabra en mayúscula).
 String _toTitleCase(String text) {
@@ -273,27 +274,48 @@ class _MixDetailPageState extends State<MixDetailPage> {
     }
   }
 
+  String? get _currentUserId {
+    try {
+      return SupabaseService().client.auth.currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Reseña perteneciente al usuario autenticado actual, o `null` si aún no ha opinado.
+  Review? get userReview => ReviewValidator.findUserReview(
+    _reviews,
+    currentUserId: _currentUserId,
+  );
+
+  /// Indica si el usuario autenticado ya tiene una reseña publicada en esta mezcla.
+  bool get hasUserReviewed => userReview != null;
+
   Future<void> _loadReviews() async {
     try {
       final repository = context.read<CommunityProvider>().repository;
       final reviews = await repository.fetchReviews(widget.mix.id);
 
       if (mounted) {
+        final mapped = reviews.map(
+          (r) => Review(
+            id: r['id'] as String,
+            author: r['author'] as String,
+            authorId: r['author_id'] as String?,
+            authorAvatarUrl: r['author_avatar_url'] as String?,
+            rating: r['rating'] as double,
+            comment: r['comment'] as String,
+            createdAt: r['created_at'] as DateTime,
+          ),
+        );
+        final sorted = ReviewValidator.sortWithUserReviewFirst(
+          mapped,
+          currentUserId: _currentUserId,
+        );
         setState(() {
-          _reviews.clear();
-          _reviews.addAll(
-            reviews.map(
-              (r) => Review(
-                id: r['id'] as String,
-                author: r['author'] as String,
-                authorId: r['author_id'] as String?,
-                authorAvatarUrl: r['author_avatar_url'] as String?,
-                rating: r['rating'] as double,
-                comment: r['comment'] as String,
-                createdAt: r['created_at'] as DateTime,
-              ),
-            ),
-          );
+          _reviews
+            ..clear()
+            ..addAll(sorted);
           _loadingReviews = false;
 
           // Actualizar el mix local con los datos de las reseñas
@@ -598,7 +620,8 @@ class _MixDetailPageState extends State<MixDetailPage> {
       );
     }
 
-    final currentUserId = SupabaseService().client.auth.currentUser?.id;
+    final currentUserId = _currentUserId;
+    final alreadyReviewed = hasUserReviewed;
 
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
@@ -609,13 +632,15 @@ class _MixDetailPageState extends State<MixDetailPage> {
               key: const ValueKey('mix-reviews'),
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _ReviewForm(
-                  controller: _reviewController,
-                  rating: _newRating,
-                  onRatingChanged: (v) => setState(() => _newRating = v),
-                  onSubmit: _handleSubmitReview,
-                ),
-                const SizedBox(height: 16),
+                if (!alreadyReviewed) ...[
+                  _ReviewForm(
+                    controller: _reviewController,
+                    rating: _newRating,
+                    onRatingChanged: (v) => setState(() => _newRating = v),
+                    onSubmit: _handleSubmitReview,
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 if (_reviews.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
@@ -732,7 +757,15 @@ class _MixDetailPageState extends State<MixDetailPage> {
   }
 
   void _handleSubmitReview() {
-    final validationError = _validateReviewInput(
+    if (hasUserReviewed) {
+      AppToast.showWarning(
+        context,
+        'Ya has publicado una reseña para esta mezcla',
+      );
+      return;
+    }
+
+    final validationError = ReviewValidator.validate(
       rating: _newRating,
       comment: _reviewController.text,
     );
@@ -1340,6 +1373,8 @@ class _ReviewForm extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 8),
+          _ReviewWordCounter(controller: controller),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerRight,
@@ -1351,6 +1386,48 @@ class _ReviewForm extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReviewWordCounter extends StatelessWidget {
+  const _ReviewWordCounter({required this.controller});
+
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final progress = ReviewValidator.evaluateProgress(value.text);
+        final isValid = progress.isValid;
+        final color = isValid
+            ? Theme.of(context).primaryColor
+            : Theme.of(
+                context,
+              ).textTheme.bodySmall?.color?.withValues(alpha: 0.7);
+
+        return Row(
+          children: [
+            Icon(
+              isValid ? Icons.check_circle_outline : Icons.info_outline,
+              size: 16,
+              color: color,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                progress.helperText,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: color,
+                  fontWeight: isValid ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1419,6 +1496,7 @@ class _EditReviewDialogState extends State<_EditReviewDialog> {
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _StarInput(
               value: _rating,
@@ -1439,6 +1517,8 @@ class _EditReviewDialogState extends State<_EditReviewDialog> {
                 ),
               ),
             ),
+            const SizedBox(height: 8),
+            _ReviewWordCounter(controller: _controller),
           ],
         ),
       ),
@@ -1452,7 +1532,7 @@ class _EditReviewDialogState extends State<_EditReviewDialog> {
               ? null
               : () async {
                   final text = _controller.text.trim();
-                  final validationError = _validateReviewInput(
+                  final validationError = ReviewValidator.validate(
                     rating: _rating,
                     comment: text,
                   );
@@ -1500,14 +1580,17 @@ class _ReviewTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).primaryColor;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).primaryColor.withValues(alpha: 0.05),
+        color: primaryColor.withValues(alpha: isMyReview ? 0.09 : 0.05),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Theme.of(context).primaryColor.withValues(alpha: 0.12),
+          color: primaryColor.withValues(alpha: isMyReview ? 0.45 : 0.12),
+          width: isMyReview ? 1.5 : 1.0,
         ),
       ),
       child: Column(
@@ -1526,11 +1609,49 @@ class _ReviewTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      review.author,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            review.author,
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isMyReview) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: primaryColor.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 12,
+                                  color: primaryColor,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Tu reseña',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: primaryColor,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     Row(
                       children: List.generate(
@@ -1540,62 +1661,47 @@ class _ReviewTile extends StatelessWidget {
                               ? Icons.star
                               : Icons.star_border,
                           size: 16,
-                          color: Theme.of(context).primaryColor,
+                          color: primaryColor,
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-              if (isMyReview)
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (value) {
-                    if (value == 'edit') {
-                      onEdit();
-                    } else if (value == 'delete') {
-                      onDelete();
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          Icon(Icons.edit),
-                          SizedBox(width: 8),
-                          Text('Editar'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(Icons.delete),
-                          SizedBox(width: 8),
-                          Text('Eliminar'),
-                        ],
-                      ),
-                    ),
-                  ],
+              Text(
+                _timeAgo(review.createdAt),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
                 ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Text(review.comment),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              _timeAgo(review.createdAt),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
-              ),
+          if (isMyReview) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Editar'),
+                ),
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  onPressed: onDelete,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  label: const Text('Eliminar'),
+                ),
+              ],
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -1645,23 +1751,4 @@ List<Color> _turquoisePaletteFrom(Color base, {int count = 4}) {
     }
   }
   return colors;
-}
-
-/// Valida los campos de una reseña (puntuación y comentario).
-/// Devuelve el mensaje de advertencia correspondiente o `null` si es válida.
-String? _validateReviewInput({
-  required double rating,
-  required String comment,
-}) {
-  final hasComment = comment.trim().isNotEmpty;
-  final hasRating = rating > 0;
-
-  if (!hasRating && !hasComment) {
-    return 'Añade una puntuación y un comentario';
-  } else if (!hasRating) {
-    return 'Indica una puntuación para continuar';
-  } else if (!hasComment) {
-    return 'Escribe un comentario sobre tu experiencia';
-  }
-  return null;
 }

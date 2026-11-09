@@ -48,7 +48,7 @@ class TobaccoReviewsRepository {
     }
   }
 
-  /// Add a new review with timeout and error logging
+  /// Add a new review with timeout, uniqueness verification and error logging
   Future<void> addReview({
     required String tobaccoId,
     required String userId,
@@ -56,6 +56,17 @@ class TobaccoReviewsRepository {
     required String comment,
   }) async {
     try {
+      final existingCount = await _supabase
+          .from('tobacco_reviews')
+          .count(CountOption.exact)
+          .eq('tobacco_id', tobaccoId)
+          .eq('author_id', userId)
+          .timeout(supabaseReadTimeout);
+
+      if (existingCount > 0) {
+        throw StateError('Ya has publicado una reseña para este tabaco.');
+      }
+
       await _supabase.from('tobacco_reviews').insert({
         'tobacco_id': tobaccoId,
         'author_id': userId,
@@ -69,6 +80,55 @@ class TobaccoReviewsRepository {
         stackTrace: stackTrace,
       );
       rethrow;
+    }
+  }
+
+  /// Update an existing tobacco review with timeout and error logging
+  Future<bool> updateReview({
+    required String reviewId,
+    required String tobaccoId,
+    required double rating,
+    required String comment,
+  }) async {
+    try {
+      await _supabase
+          .from('tobacco_reviews')
+          .update({
+            'rating': rating,
+            'comment': comment,
+          })
+          .eq('id', reviewId)
+          .timeout(supabaseWriteTimeout);
+      return true;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error al actualizar reseña de tabaco: $reviewId (tabaco: $tobaccoId)',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return false;
+    }
+  }
+
+  /// Delete a tobacco review by ID with timeout and error logging
+  Future<bool> deleteReview({
+    required String reviewId,
+    required String tobaccoId,
+  }) async {
+    try {
+      await _supabase
+          .from('tobacco_reviews')
+          .delete()
+          .eq('id', reviewId)
+          .timeout(supabaseWriteTimeout);
+      return true;
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        'Error al eliminar reseña de tabaco: $reviewId (tabaco: $tobaccoId)',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return false;
     }
   }
 }

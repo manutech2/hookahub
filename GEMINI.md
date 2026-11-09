@@ -1064,6 +1064,22 @@ Se ha migrado del sistema de `ScaffoldMessenger` a un sistema de notificaciones 
   1. **Limpieza Automática en Build Phases de Xcode (`ios/Runner.xcodeproj/project.pbxproj`)**: Preceder la ejecución de `xcode_backend.sh` en las fases `Run Script` y `Thin Binary` con `xattr -cr "${BUILT_PRODUCTS_DIR}" "${TARGET_BUILD_DIR}" "${PROJECT_DIR}/../assets" 2>/dev/null || true`, eliminando cualquier atributo extendido de macOS antes de empaquetar y firmar `App.framework`.
   2. **Limpieza de Caché de Productos en `DerivedData`**: Si un `App.framework` previo en `~/Library/Developer/Xcode/DerivedData/Runner-*/Build/Products/` ya quedó contaminado, ejecutar `xattr -cr` sobre dicho directorio o `flutter clean`.
 
+### 12. Sistema Unificado de Reseñas: Validación de Calidad, Unicidad por Usuario y Pinning en Primera Posición
+- **Problema**:
+  1. Los formularios de reseñas de tabacos (`TobaccoDetailPage`) y mezclas (`MixDetailPage`) aceptaban textos triviales (`"."`, `"ok"`, `". . . . ."`) y duplicaban la lógica de validación local.
+  2. No se restringía la publicación de múltiples reseñas por un mismo usuario sobre el mismo tabaco o mezcla, ni se priorizaba la reseña propia en la lista.
+  3. `TobaccoReviewsRepository` y `TobaccoReviewsProvider` carecían de operaciones de edición (`updateReview`) y borrado (`deleteReview`).
+- **Solución Arquitectónica (Regla de Oro)**:
+  1. **Validador Centralizado (`ReviewValidator` en `lib/core/utils/review_validator.dart`)**:
+     - Exigir `rating > 0`, un mínimo de **5 palabras válidas** (`>= 2` caracteres alfanuméricos Unicode `[\p{L}\p{N}]` por palabra) y un mínimo de **15 caracteres útiles** (alfanuméricos) en total.
+     - Proveer `ReviewValidator.evaluateProgress(comment)` junto con `ValueListenableBuilder<TextEditingValue>` para mostrar feedback reactivo en tiempo real (`"Mínimo 5 palabras (llevas X)"` → `"Comentario válido (X palabras)"`) sin reconstruir toda la pantalla.
+  2. **Unicidad y Adaptación Dinámica de UI**:
+     - Verificar en repositorio mediante `.count(CountOption.exact)` que el usuario no posea ya una reseña activa antes de insertar.
+     - Exponer `userReview` y `hasUserReviewed`: cuando `hasUserReviewed == true`, ocultar el formulario de creación y reactivarlo inmediatamente tras eliminar la reseña propia.
+  3. **Pinning Prioritario y Paridad CRUD**:
+     - Ordenar todas las listas de reseñas con `ReviewValidator.sortWithUserReviewFirst(...)`, fijando la reseña del usuario autenticado en el índice `0` con badge `"Tu reseña"`, borde destacado y acciones directas de **Editar** y **Eliminar**, manteniendo el resto ordenado por `created_at DESC`.
+
+
 
 
 

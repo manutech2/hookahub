@@ -11,15 +11,17 @@ class FakeTobaccoReviewsRepository implements TobaccoReviewsRepository {
     Review(
       id: 'rev-1',
       author: 'User1',
+      authorId: 'user-1',
       rating: 4.5,
-      comment: 'Muy buen sabor',
+      comment: 'Muy buen sabor a menta fresca e intensa',
       createdAt: DateTime(2026, 1, 1),
     ),
     Review(
       id: 'rev-2',
       author: 'User2',
+      authorId: 'user-2',
       rating: 3.5,
-      comment: 'Aceptable',
+      comment: 'Sabor aceptable pero dura poco tiempo',
       createdAt: DateTime(2026, 1, 2),
     ),
   ];
@@ -29,7 +31,7 @@ class FakeTobaccoReviewsRepository implements TobaccoReviewsRepository {
     if (shouldThrow) {
       throw Exception('Database query timeout');
     }
-    return mockReviews;
+    return List<Review>.of(mockReviews);
   }
 
   @override
@@ -47,11 +49,39 @@ class FakeTobaccoReviewsRepository implements TobaccoReviewsRepository {
       Review(
         id: 'rev-new',
         author: 'Me',
+        authorId: userId,
         rating: rating,
         comment: comment,
-        createdAt: DateTime.now(),
+        createdAt: DateTime(2026, 1, 3),
       ),
     );
+  }
+
+  @override
+  Future<bool> updateReview({
+    required String reviewId,
+    required String tobaccoId,
+    required double rating,
+    required String comment,
+  }) async {
+    if (shouldThrow) return false;
+    final idx = mockReviews.indexWhere((r) => r.id == reviewId);
+    if (idx == -1) return false;
+    mockReviews[idx] = mockReviews[idx].copyWith(
+      rating: rating,
+      comment: comment,
+    );
+    return true;
+  }
+
+  @override
+  Future<bool> deleteReview({
+    required String reviewId,
+    required String tobaccoId,
+  }) async {
+    if (shouldThrow) return false;
+    mockReviews.removeWhere((r) => r.id == reviewId);
+    return true;
   }
 }
 
@@ -110,12 +140,54 @@ void main() {
       await provider.addReview(
         userId: 'user-xyz',
         rating: 5.0,
-        comment: 'Excelente',
+        comment: 'Excelente sabor con humo muy denso',
       );
 
       expect(provider.state, isA<TobaccoReviewsLoaded>());
       expect(provider.reviews.length, equals(3));
       expect(provider.reviewCount, equals(3));
+      expect(provider.hasUserReviewed, isTrue);
+      expect(provider.reviews.first.authorId, equals('user-xyz'));
+    });
+
+    test('fija la reseña del usuario actual en primera posición aunque sea más antigua', () async {
+      final fakeRepo = FakeTobaccoReviewsRepository();
+      final provider = TobaccoReviewsProvider(
+        fakeRepo,
+        currentUserId: 'user-1',
+      );
+
+      await provider.loadReviews('tobacco-123');
+
+      expect(provider.hasUserReviewed, isTrue);
+      expect(provider.userReview?.id, equals('rev-1'));
+      expect(provider.reviews.first.id, equals('rev-1'));
+      expect(provider.reviews.last.id, equals('rev-2'));
+    });
+
+    test('updateReview y deleteReview actualizan estado y recalculan estadísticas', () async {
+      final fakeRepo = FakeTobaccoReviewsRepository();
+      final provider = TobaccoReviewsProvider(
+        fakeRepo,
+        currentUserId: 'user-1',
+      );
+
+      await provider.loadReviews('tobacco-123');
+      expect(provider.hasUserReviewed, isTrue);
+
+      final updated = await provider.updateReview(
+        reviewId: 'rev-1',
+        rating: 2.5,
+        comment: 'Cambio mi opinión tras varias cazoletas',
+      );
+      expect(updated, isTrue);
+      expect(provider.userReview?.rating, equals(2.5));
+      expect(provider.averageRating, equals(3.0));
+
+      final deleted = await provider.deleteReview('rev-1');
+      expect(deleted, isTrue);
+      expect(provider.hasUserReviewed, isFalse);
+      expect(provider.reviewCount, equals(1));
     });
   });
 }
