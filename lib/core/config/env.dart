@@ -31,6 +31,20 @@ abstract final class Env {
   /// Identificador numérico de la app en Apple App Store (ej. para reseñas).
   static const String appleAppStoreId = String.fromEnvironment('APPLE_APP_STORE_ID');
 
+  /// Nombre de versión de la aplicación inyectado automáticamente por Flutter
+  /// a partir del campo `version` de `pubspec.yaml` (ej. "1.1.0").
+  static const String appVersion = String.fromEnvironment(
+    'FLUTTER_BUILD_NAME',
+    defaultValue: '1.1.0',
+  );
+
+  /// Número de compilación (build number) inyectado automáticamente por Flutter
+  /// a partir del campo `version` de `pubspec.yaml` (ej. "2").
+  static const String appBuildNumber = String.fromEnvironment(
+    'FLUTTER_BUILD_NUMBER',
+    defaultValue: '2',
+  );
+
   /// Comprueba si las variables mínimas esenciales de Supabase están definidas.
   static bool get isSupabaseConfigured =>
       supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty;

@@ -477,7 +477,7 @@ class _ProfilePageState extends State<ProfilePage> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'Versión 1.0.0',
+          'Versión ${Env.appVersion}',
           style: TextStyle(
             fontSize: 12,
             color: subtleColor,
@@ -518,7 +518,7 @@ class _ProfilePageState extends State<ProfilePage> {
     showLicensePage(
       context: context,
       applicationName: 'Hookahub',
-      applicationVersion: '1.0.0',
+      applicationVersion: Env.appVersion,
       applicationIcon: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(

@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/config/env.dart';
 import '../../../core/constants.dart';
 import '../../../core/data/supabase_service.dart';
 import '../../../core/utils/app_toast.dart';
@@ -70,7 +71,7 @@ class _ContactViewState extends State<_ContactView> {
       subject: _subjectCtrl.text,
       message: _messageCtrl.text,
       platform: _getPlatform(),
-      appVersion: '1.0.0',
+      appVersion: Env.appVersion,
     );
 
     if (!context.mounted) return;
