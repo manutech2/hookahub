@@ -2,6 +2,15 @@
 
 Este documento recopila las soluciones arquitectónicas, problemas resueltos y reglas descubiertas durante el desarrollo de la aplicación, para que sirvan como referencia en futuras implementaciones dictadas a asistentes de inteligencia artificial.
 
+## 🔄 Documentación Viva (`README.md` + `GEMINI.md`)
+
+- **Regla Obligatoria**: El archivo [`README.md`](README.md) es la fuente de verdad funcional y arquitectónica del repositorio para desarrolladores humanos, agentes de código y herramientas externas de análisis (como **Jira AI / Atlassian Rovo**).
+- **Disparador de Actualización Automática**: Siempre que se implemente o modifique cualquiera de los siguientes elementos, es obligatorio actualizar `README.md` (y `GEMINI.md` si aplica una nueva regla técnica) **en el mismo cambio** antes de dar la tarea por finalizada:
+  1. Nuevas funcionalidades, pantallas o módulos dentro de `lib/features/`.
+  2. Nuevas tablas, columnas relevantes, funciones RPC, triggers o políticas RLS en `supabase/migrations/`.
+  3. Cambios de stack, variables de entorno (`.env.example` / `lib/core/config/env.dart`) o dependencias clave en `pubspec.yaml`.
+  4. Cierre de un punto del backlog de la Sección 7.B de `README.md`: al implementarse una mejora sugerida, debe moverse de **"Oportunidades de Evolución"** a **"Puntos Ya Blindados"** o a la **"Matriz de Funcionalidades"** según corresponda.
+
 ## 🔐 Autenticación y Seguridad
 
 ### Integración Nativa de Google SignIn (google_sign_in ^7.0.0+)

@@ -1,158 +1,105 @@
-# Copilot Instructions for Flutter Development
+# Copilot & AI Instructions for Hookahub
 
 ## 🧩 Project Context
-- **Framework**: Flutter (Dart SDK ^3.9.2)
-- **Target Platforms**: Android & iOS only
-- **Architecture**: Clean Architecture (feature-based separation)
-- **State Management**: Provider pattern
+
+- **App**: Hookahub (`v1.1.0+2`) — Social mobile app for discovering shisha tobaccos, creating and rating community mixes, managing Top 5 favorites, history, and real-time notifications.
+- **Framework**: Flutter (Dart SDK `^3.9.2`), Material 3.
+- **Target Platforms**: Android & iOS only.
+- **Architecture**: Clean Architecture separated by feature (`data/`, `domain/`, `presentation/`).
+- **Backend / BaaS**: Supabase (`supabase_flutter ^2.10.3`) via `SupabaseService` singleton (`lib/core/data/supabase_service.dart`), PostgREST, PostgreSQL RPCs & Triggers, Storage (`avatars`), and Supabase Realtime.
+- **State Management**: `Provider` (`^6.1.2`) + `ChangeNotifier` registered in root `MultiProvider` (`lib/app.dart`) using **sealed UI state classes (`sealed class`)** — never fragmented loading/error booleans.
+- **Knowledge Base**: Always consult [`README.md`](../README.md) for product overview/architecture and [`GEMINI.md`](../GEMINI.md) for hardened rules and resolved pitfalls before proposing or writing code.
 
 ---
 
-## 📁 Project Structure
-```
+## 📁 Real Project Structure
+
+```text
 lib/
-├── main.dart                 # Entry point
-├── app.dart                  # App initialization & configuration
-├── core/                     # Cross-cutting concerns
-│   ├── constants.dart        # Global constants
-│   ├── theme.dart            # Light/Dark theme setup
-│   ├── theme_provider.dart   # Theme management via Provider
-│   └── models/               # Global data models
-├── features/                 # Feature-based modularization
-│   ├── auth/                 # Authentication
-│   ├── profile/              # User Profile
-│   └── [feature_name]/       # Additional features
-├── widgets/                  # Reusable widgets
-└── l10n/                     # Localization files (.arb)
+├── main.dart                     # Entry point: Env check, Supabase.initialize, MobileAds, DeepLinkService
+├── app.dart                      # Root MultiProvider, AppTheme, ToastificationWrapper, DatabaseConnectionBanner, l10n
+├── core/                         # Cross-cutting infrastructure
+│   ├── config/env.dart           # Compile-time Env via String.fromEnvironment (--dart-define-from-file=.env)
+│   ├── constants.dart            # Color palette, timeouts (4s read / 8s write), rootNavigatorKey, appAvatarIcons
+│   ├── storage.dart              # Theme persistence via SharedPreferences
+│   ├── theme.dart                # Light & Dark Material 3 themes
+│   ├── theme_provider.dart       # ThemeMode state via ChangeNotifier
+│   ├── data/supabase_service.dart
+│   ├── models/                   # Shared models: mix.dart, tobacco.dart, review.dart, notification.dart
+│   ├── providers/                # database_health_provider.dart
+│   ├── services/                 # database_health_service.dart, deep_link_service.dart, interstitial_ad_manager.dart
+│   └── utils/                    # app_logger.dart, app_error_mapper.dart, app_toast.dart, review_validator.dart
+├── features/                     # 12 feature modules (strictly data / domain / presentation)
+│   ├── auth/                     # Email & Google Sign-In v7, registration, password recovery, AuthGate
+│   ├── catalog/                  # Paginated tobaccos, brand RPC filter, tobacco reviews, tobacco requests
+│   ├── community/                # Community feed, MixPercentageCalculator (100%), atomic mix edit RPC, mix detail
+│   ├── favorites/                # Favorites & Top 5 ordered list
+│   ├── feedback/                 # Contact & bug/suggestion form (user_feedback)
+│   ├── history/                  # Deduplicated recent mix views (mix_views)
+│   ├── home/                     # Home dashboard & Realtime global stats (app_statistics)
+│   ├── mixes/                    # Current user's created mixes & optimistic counter sync
+│   ├── notifications/            # Supabase Realtime notifications & contextual navigation
+│   ├── onboarding/               # 3-step onboarding flow persisted locally
+│   ├── profile/                  # Profile view/edit, avatar compression + cache-busting, settings, delete_user_account RPC
+│   └── search/                   # Unified search (tobaccos & mixes), L1 suggestions cache, local search history
+├── widgets/                      # Shared widgets (MainNavigationPage, UserAvatar, TobaccoImage, MixCard, TobaccoCard, AdBanner*)
+└── l10n/                         # Localization .arb files (app_es.arb, app_en.arb)
 ```
 
 ---
 
-## ⚙️ Core Dependencies
+## ⚙️ Core Dependencies (`pubspec.yaml`)
+
 | Category | Package | Version | Purpose |
-|-----------|----------|---------|----------|
-| Core | flutter | SDK | Framework |
-| Localization | flutter_localizations | built-in | Localization support |
-| Icons | cupertino_icons | latest | iOS-like icons |
-| State Management | provider | ^6.1.2 | Reactive state management |
-| Persistence | shared_preferences | ^2.2.3 | User preferences |
-| i18n | intl | ^0.20.2 | Internationalization |
-| Sharing | share_plus | ^10.0.2 | Content sharing |
-| Linting | flutter_lints | ^5.0.0 | Code analysis |
-| Testing | flutter_test | built-in | Unit & widget testing |
+| :--- | :--- | :--- | :--- |
+| Core | `flutter` / `flutter_localizations` | SDK (`^3.9.2`) | UI framework & localization delegates |
+| Backend | `supabase_flutter` | `^2.10.3` | Auth, PostgREST, RPC, Realtime, Storage |
+| Auth | `google_sign_in` | `^7.2.0` | Native Google Sign-In (`GoogleSignIn.instance` singleton) |
+| State Management | `provider` | `^6.1.2` | `MultiProvider`, `ChangeNotifier`, `Consumer` / `Selector` |
+| Persistence | `shared_preferences` | `^2.2.3` | Theme, onboarding flag, local search history |
+| Images & Media | `cached_network_image`, `image_picker`, `file_picker`, `image_cropper`, `flutter_image_compress` | Latest in `pubspec.yaml` | Cropped/compressed uploads & RAM-bounded decoding |
+| Connectivity & Links | `connectivity_plus`, `app_links`, `share_plus`, `url_launcher` | Latest in `pubspec.yaml` | Healthchecks, deep links (`hookahub://`), sharing |
+| Observability & UX | `logger`, `toastification`, `timeago` | Latest in `pubspec.yaml` | `AppLogger` (remote `app_logs`), `AppToast`, relative timestamps |
+| Ads | `google_mobile_ads` | `^9.1.0` | AdMob adaptive banners & preloaded interstitials |
+| Linting & Testing | `flutter_lints` (`^6.0.0`), `flutter_test` | SDK | Static analysis & unit/widget tests (`test/`) |
+
+> **Important:** Do NOT introduce `Dio`, `GoRouter`, `Freezed`, or `get_it` unless explicitly requested by the user — the project intentionally uses `SupabaseService`, standard `Navigator` (with per-tab `Navigator` keys in `MainNavigationPage` + `rootNavigatorKey`), hand-written immutable models, and `MultiProvider`.
 
 ---
 
-## 🧠 Development Patterns
+## 🧠 Mandatory Architecture & Coding Rules
 
-### 1. Theming
-- Dual theme support (light/dark)
-- Persistent theme preference (SharedPreferences)
-- Provider for reactive updates
-- Centralized theme configuration
-
-### 2. State Management
-- Use **Provider** & **ChangeNotifier**
-- Declare `MultiProvider` in app root
-- Use `Consumer` for efficient widget rebuilds
-
-### 3. Feature Architecture
-Each feature module must include:
-```
-feature_name/
-├── data/        # Data sources, repositories
-├── domain/      # Entities & use cases
-├── presentation/# UI, providers, pages
-```
-
-### 4. Localization
-- `.arb` files under `lib/l10n/`
-- Supported locales defined in `l10n.yaml`
-- Use `AppLocalizations.of(context)`
+1. **Feature Layering**: Every module under `lib/features/<name>/` must keep `data/`, `domain/`, and `presentation/` separated. Never place pages or providers in a feature's root folder.
+2. **Sealed UI States**: Use `sealed class <Feature>State` (`Initial`, `Loading`, `Loaded`, `Error`) instead of fragmented boolean flags (`isLoading`, `hasError`).
+3. **Logging (`AppLogger`)**: NEVER use `print()` or `debugPrint()`. Use `AppLogger.debug/info/warning` for diagnostics and `AppLogger.error/fatal` (with `error:` and `stackTrace:`) for unexpected failures. Never log transient Realtime disconnects or network `TimeoutException`/`SocketException` healthchecks as `AppLogger.error`.
+4. **Error Mapping & Timeouts**: Map user-facing exceptions with `AppErrorMapper.toSpanish(error)` and display feedback via `AppToast` / `ScaffoldMessenger`. Apply `supabaseReadTimeout` (`4s`) and `supabaseWriteTimeout` (`8s`) from `lib/core/constants.dart` to Supabase calls.
+5. **No Hardcoded Form/Screen Colors**: Always use color tokens from `lib/core/constants.dart` (`turquoise`, `turquoiseDark`, `fieldLight`, `navy`, `darkBg`, `darkTurquoise`, `darkNavy`, `fieldDark`, `warningRed`, etc.) instead of inline `Color(0xFF...)`.
+6. **Environment Variables**: Never bundle `.env` into `pubspec.yaml` `assets:`. Read secrets strictly through `Env` (`lib/core/config/env.dart`) injected via `--dart-define-from-file=.env`.
+7. **Supabase & SQL Security**:
+   - Always wrap auth checks in RLS policies with `(select auth.uid())` / `(select auth.role())` to avoid `auth_rls_initplan`.
+   - Always set `SET search_path = public` on `SECURITY DEFINER` functions.
+   - Use `.count(CountOption.exact)` for counts instead of `.select('id')` + `.length`.
+   - Keep `avatars` public without a broad `SELECT` policy on `storage.objects` (prevents directory listing).
+8. **Image Memory Safety**: Use `UserAvatar` and `TobaccoImage` (bounded RAM cache via `LayoutBuilder` and `memCacheWidth` only to preserve aspect ratio).
 
 ---
 
-## 🧩 Configuration Files
+## 🔄 Documentación Viva (Actualización Automática de `README.md` y `GEMINI.md`)
 
-### `l10n.yaml`
-```yaml
-arb-dir: lib/l10n
-template-arb-file: app_en.arb
-output-localization-file: app_localizations.dart
-```
+To keep the repository continuously understandable for developers and external tools (such as **Jira AI / Atlassian Rovo**, GitHub Copilot, and code auditors):
 
-### `pubspec.yaml`
-```yaml
-flutter:
-  generate: true
-```
-
-### `analysis_options.yaml`
-```yaml
-include: package:flutter_lints/flutter.yaml
-```
+- **Whenever a task adds or modifies any of the following**, you MUST update [`README.md`](../README.md) (and [`GEMINI.md`](../GEMINI.md) if a new technical rule or pitfall was solved) **in the same change before finishing**:
+  1. New features, screens, providers, or repositories inside `lib/features/` or `lib/core/`.
+  2. New or altered Supabase tables, RPC functions, triggers, or RLS migrations under `supabase/migrations/`.
+  3. Dependency changes in `pubspec.yaml` or new environment variables in `.env.example` / `lib/core/config/env.dart`.
+  4. Completion of any item listed in Section 7.B (*Oportunidades de Evolución y Épicas Sugeridas*) of `README.md`: move completed items out of the open backlog and reflect them in Section 4 (*Matriz de Funcionalidades*) and/or Section 7.A (*Puntos Ya Blindados*).
+- Keep `README.md` concise, factual, and strictly aligned with the actual codebase.
 
 ---
 
-## 💻 Build Configurations
+## 🧪 Verification & Commands
 
-### Android
-- compileSdk: `flutter.compileSdkVersion`
-- minSdk: `flutter.minSdkVersion`
-- targetSdk: `flutter.targetSdkVersion`
-- Java/Kotlin compatibility: VERSION_11
-- Gradle with Kotlin DSL (`build.gradle.kts`)
-
-### iOS
-- Unique Bundle Identifier
-- Permissions in `Info.plist`
-- Assets, icons & launch images configured
-
----
-
-## 🧪 Testing
-- Unit Tests → `flutter_test`
-- Widget Tests → UI component testing
-- Integration Tests → End-to-end flow validation
-
----
-
-## ⚡ Performance Best Practices
-- Use `const` constructors whenever possible
-- Cache large assets (e.g., `cached_network_image`)
-- Lazy-load long lists (`ListView.builder`)
-- Profile builds for performance monitoring
-
----
-
-## ✍️ Coding Conventions
-
-| Element | Convention |
-|----------|-------------|
-| Files | snake_case |
-| Classes | PascalCase |
-| Variables & Methods | camelCase |
-| Constants | UPPER_CASE or camelCase |
-| Comments | Descriptive & JSDoc-style for APIs |
-
----
-
-## 🧭 Code Style Guidelines for Copilot
-- Suggest Provider-based patterns by default.
-- Prefer feature-based folder suggestions (avoid monolithic code).
-- Generate tests when adding new providers or repositories.
-- Encourage use of localization keys instead of hardcoded text.
-- When generating UI, default to **StatelessWidget** unless stateful logic is required.
-- Always wrap shared state in Provider or ChangeNotifier.
-
----
-
-## 🧰 Additional Recommendations
-- Keep `README.md` updated with environment setup.
-- Use environment variables for sensitive keys.
-- Avoid logic in UI widgets (move to providers or use cases).
-- Follow SOLID principles within feature modules.
-
----
-**Author**: Senior Flutter Developer (10+ years experience)
-**Purpose**: Ensure AI-assisted code generation aligns with maintainable, scalable, and production-ready Flutter architecture.
+- Run app: `flutter run --dart-define-from-file=.env`
+- Static analysis: `flutter analyze`
+- Run tests: `flutter test`
+- Conventional Commits: `feat(scope): ...`, `fix(scope): ...`, `docs(scope): ...`, `refactor(scope): ...`
