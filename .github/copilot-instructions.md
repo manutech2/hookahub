@@ -93,6 +93,7 @@ To keep the repository continuously understandable for developers and external t
   2. New or altered Supabase tables, RPC functions, triggers, or RLS migrations under `supabase/migrations/`.
   3. Dependency changes in `pubspec.yaml` or new environment variables in `.env.example` / `lib/core/config/env.dart`.
   4. Completion of any item listed in Section 7.B (*Oportunidades de Evolución y Épicas Sugeridas*) of `README.md`: move completed items out of the open backlog and reflect them in Section 4 (*Matriz de Funcionalidades*) and/or Section 7.A (*Puntos Ya Blindados*).
+  5. **Cross-Repo Impact (`WebAdmin_Hookahub`)**: Whenever changes affect shared Supabase tables (`user_feedback`, `tobacco_requests`, `tobaccos`, `mixes`, `reviews`, `tobacco_reviews`, `notifications`, `app_logs`, `app_statistics`), status enums, or admin-managed flows, update Section 8 of `README.md` and flag/create the corresponding `web-admin` task in Jira (`SCRUM`).
 - Keep `README.md` concise, factual, and strictly aligned with the actual codebase.
 
 ---

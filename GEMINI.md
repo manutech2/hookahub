@@ -10,6 +10,7 @@ Este documento recopila las soluciones arquitectónicas, problemas resueltos y r
   2. Nuevas tablas, columnas relevantes, funciones RPC, triggers o políticas RLS en `supabase/migrations/`.
   3. Cambios de stack, variables de entorno (`.env.example` / `lib/core/config/env.dart`) o dependencias clave en `pubspec.yaml`.
   4. Cierre de un punto del backlog de la Sección 7.B de `README.md`: al implementarse una mejora sugerida, debe moverse de **"Oportunidades de Evolución"** a **"Puntos Ya Blindados"** o a la **"Matriz de Funcionalidades"** según corresponda.
+  5. **Impacto cruzado con `WebAdmin_Hookahub`**: Si el cambio altera tablas compartidas en Supabase (`user_feedback`, `tobacco_requests`, `tobaccos`, `mixes`, `reviews`, `tobacco_reviews`, `notifications`, `app_logs`, `app_statistics`), estados (`status`) o flujos administrables desde la web, se debe actualizar la Sección 8 de `README.md` y advertir al desarrollador (o crear/actualizar la tarea `web-admin` en el proyecto `SCRUM` de Jira) para mantener sincronizado el panel administrativo.
 
 ## 🔐 Autenticación y Seguridad
 

@@ -15,6 +15,7 @@
 - [5. Modelo de Base de Datos, RPCs y Seguridad (Supabase)](#5-modelo-de-base-de-datos-rpcs-y-seguridad-supabase)
 - [6. Instalación, Configuración y Comandos](#6-instalación-configuración-y-comandos)
 - [7. Contexto para Auditoría, Jira AI y Generación de Backlog](#7-contexto-para-auditoría-jira-ai-y-generación-de-backlog)
+- [8. Ecosistema Hookahub y Sincronización con `WebAdmin_Hookahub`](#8-ecosistema-hookahub-y-sincronización-con-webadmin_hookahub)
 
 ---
 
@@ -329,8 +330,40 @@ Las siguientes líneas representan áreas reales de mejora y nuevas funcionalida
    - *Mejora sugerida*: Crear workflows de CI para ejecutar `flutter analyze` y `flutter test` automáticamente en cada PR, verificar formato (`dart format --output=none --set-exit-if-changed`) y automatizar builds/entregas a Firebase App Distribution, Google Play Internal Testing o TestFlight.
 
 6. **Épica 6 — Flujo de Moderación y Administración**:
-   - *Situación actual*: Las tablas `tobacco_requests` y `user_feedback` reciben registros desde la app con estados (`pending`, `approved`/`resolved`, etc.), y los usuarios pueden crear contenido abierto en `mixes`, `reviews` y `tobacco_reviews`, sin mecanismos in-app de reporte de abuso ni vista de estado para el solicitante.
-   - *Mejora sugerida*: Añadir botón de reporte de contenido inapropiado en mezclas/reseñas, mostrar al usuario el historial/estado de sus solicitudes de tabacos y habilitar webhooks o notificaciones automáticas (`feedbackResponse`, `newTobacco`) cuando un administrador resuelva una solicitud.
+   - *Situación actual*: Las tablas `tobacco_requests` y `user_feedback` reciben registros desde la app con estados (`pending`, `approved`/`resolved`, etc.), y los usuarios pueden crear contenido abierto en `mixes`, `reviews` y `tobacco_reviews`, sin mecanismos in-app de reporte de abuso ni vista de estado para el solicitante. La gestión administrativa recae en el proyecto hermano [`WebAdmin_Hookahub`](#8-ecosistema-hookahub-y-sincronización-con-webadmin_hookahub), que ya dispone del apartado **"Feedback y Soporte"**.
+   - *Mejora sugerida*: Añadir botón de reporte de contenido inapropiado en mezclas/reseñas, mostrar al usuario el historial/estado de sus solicitudes de tabacos, habilitar notificaciones automáticas (`feedbackResponse`, `newTobacco`) al resolver en `WebAdmin_Hookahub` y sincronizar los reportes de `user_feedback` con tickets de Jira (`SCRUM`).
+
+---
+
+## 8. Ecosistema Hookahub y Sincronización con `WebAdmin_Hookahub`
+
+**Hookahub** forma un único ecosistema junto con el repositorio hermano **`WebAdmin_Hookahub`** (panel web de administración). Ambos proyectos comparten la **misma instancia de Supabase** (tablas, políticas RLS, Storage y Realtime) y el **mismo proyecto de Jira (`SCRUM` — ManuTech)**.
+
+### Flujo entre App Móvil, Supabase, `WebAdmin_Hookahub` y Jira
+
+```mermaid
+flowchart LR
+    APP["App Móvil Hookahub\n(Flutter · iOS/Android)"] -->|"Inserta feedback, solicitudes\ny contenido comunitario"| SB[("Supabase Compartido\nPostgreSQL · Storage · Realtime")]
+    WA["WebAdmin_Hookahub\n(Panel Web Admin)"] <-->|"Administra catálogo, Feedback y Soporte,\nsolicitudes y moderación"| SB
+    SB -->|"Realtime / Triggers\n(newTobacco, feedbackResponse)"| APP
+    WA -.->|"Crea / enlaza incidencias\n(user_feedback -> ticket)"| JIRA["Jira (Proyecto SCRUM)\nEtiquetas: app-movil & web-admin"]
+    APP -.->|"Implementa features y cierra\ncriterios en Jira"| JIRA
+```
+
+### Contrato de Tablas Compartidas (`hookahub` ↔ `WebAdmin_Hookahub`)
+
+| Tabla / Recurso Supabase | Rol en `hookahub` (App Móvil) | Rol en `WebAdmin_Hookahub` (Panel Web) |
+| :--- | :--- | :--- |
+| **`user_feedback`** | Envía bugs, sugerencias y soporte desde `ContactPage` (`category`, `subject`, `message`, `platform`, `app_version`). | **Apartado "Feedback y Soporte"**: visualiza mensajes reales de usuarios, gestiona su `status` (`pending`, `in_progress`, `resolved`, `closed`) y escala incidencias a Jira (`SCRUM`). |
+| **`tobacco_requests`** | Envía solicitudes de nuevos tabacos desde `RequestTobaccoPage` (`brand`, `name`, `description`, `flavors`). | Revisa solicitudes pendientes y aprueba/rechaza incorporaciones al catálogo (`public.tobaccos`). |
+| **`tobaccos` & Storage** | Consume el catálogo paginado, marcas (`get_available_tobacco_brands`) e imágenes WebP optimizadas. | CRUD completo de tabacos, marcas e imágenes en Storage. |
+| **`mixes`, `reviews`, `tobacco_reviews`** | Creación, edición y reseña de mezclas y tabacos por la comunidad. | Supervisión, moderación y eliminación de contenido comunitario reportado (`content_reports`). |
+| **`notifications`** | Escucha eventos por WebSocket (`Supabase Realtime`) en `NotificationsProvider`. | Emite avisos o dispara triggers al aprobar un tabaco (`newTobacco`) o responder soporte (`feedbackResponse`). |
+| **`app_logs` & `app_statistics`** | Registra errores `error`/`fatal` vía `AppLogger` y muestra contadores globales en `HomePage`. | Monitorización de errores en producción y métricas globales de uso. |
+
+### Regla de Impacto Cruzado
+
+Toda modificación en **Hookahub** que añada o cambie tablas, estados (`status`), políticas RLS, tipos de notificación o flujos de catálogo/moderación/soporte **debe evaluar si requiere cambios en `WebAdmin_Hookahub`**. En Jira (`SCRUM`), las tareas vinculadas entre ambos repositorios se agrupan bajo la misma Épica usando las etiquetas **`app-movil`** y **`web-admin`** y el enlace de incidencia correspondiente (*Relates* / *Blocks*).
 
 ---
 
